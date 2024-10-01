@@ -1,0 +1,24 @@
+# project_structure
+
+natural_gas_backtesting/
+│
+├── data/
+│   ├── __init__.py
+│   ├── data_loader.py
+│   └── alternative_data.py
+│
+├── strategies/
+│   ├── __init__.py
+│   ├── base_strategy.py
+│   └── example_strategies.py
+│
+├── backtester/
+│   ├── __init__.py
+│   └── backtester.py
+│
+├── utils/
+│   ├── __init__.py
+│   └── helpers.py
+│
+├── main.py
+└── requirements.txt
