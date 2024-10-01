@@ -2,6 +2,7 @@
 
 from .base_strategy import BaseStrategy
 import pandas as pd
+import numpy as np 
 
 class MovingAverageCrossover(BaseStrategy):
     def __init__(self, data, short_window=10, long_window=30):
