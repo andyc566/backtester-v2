@@ -126,10 +126,14 @@ class TradingStrategy:
         }
 
     def plot_trading_signals(self):
-        """Plot the spread and highlight buy, sell, and close signals."""
+        """Plot the spread and highlight buy, sell, and profit-taking signals."""
         buy_signals = self.signals[self.signals['signals'] == 1].index
         sell_signals = self.signals[self.signals['signals'] == -1].index
-        close_positions = self.signals[(self.signals['signals'] == 0) & (self.signals['positions'].shift(1) != 0)].index
+
+        # Identify where positions are closed
+        close_positions = self.signals[
+            (self.signals['positions'].shift(1) != 0) & (self.signals['positions'] == 0)
+        ].index
 
         plt.figure(figsize=(14, 7))
         plt.plot(self.spread, label="Spread", color="blue")
