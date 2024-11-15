@@ -37,10 +37,12 @@ class DataLoader:
 
 
 class OrnsteinUhlenbeck:
-    """Implements the Ornstein-Uhlenbeck process to model mean reversion."""
-    def __init__(self, spread: pd.Series):
+    """Implements the Ornstein-Uhlenbeck process to model mean reversion with take-profit criteria."""
+    def __init__(self, spread: pd.Series, z_entry_threshold: float = 2.0, take_profit_threshold: float = 0.5):
         self.spread = spread
         self.params = None
+        self.z_entry_threshold = z_entry_threshold  # Z-score threshold for entry
+        self.take_profit_threshold = take_profit_threshold  # Z-score threshold for exit
 
     def fit(self) -> Tuple[float, float, float]:
         """Estimate OU parameters (mean, speed of reversion, volatility)."""
@@ -71,7 +73,29 @@ class OrnsteinUhlenbeck:
             self.fit()
         mu, theta, sigma = self.params
         z_score = (self.spread - mu) / sigma
-        return pd.Series(np.where(z_score > 1, -1, np.where(z_score < -1, 1, 0)), index=self.spread.index)
+
+        signals = np.zeros(len(z_score))  # Initialize signals
+        position = 0  # Track current position: 1 for long, -1 for short, 0 for neutral
+
+        for i in range(1, len(z_score)):
+            if position == 0:  # No position
+                if z_score[i] > self.z_entry_threshold:  # Enter short position
+                    signals[i] = -1
+                    position = -1
+                elif z_score[i] < -self.z_entry_threshold:  # Enter long position
+                    signals[i] = 1
+                    position = 1
+            elif position == 1:  # Long position
+                if z_score[i] >= -self.take_profit_threshold:  # Close long position
+                    signals[i] = 0
+                    position = 0
+            elif position == -1:  # Short position
+                if z_score[i] <= self.take_profit_threshold:  # Close short position
+                    signals[i] = 0
+                    position = 0
+
+        return pd.Series(signals, index=self.spread.index)
+
 
 
 class TradingStrategy:
