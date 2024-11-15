@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 from scipy.optimize import minimize
+import matplotlib.pyplot as plt
 from typing import Tuple
 
 
@@ -99,6 +100,22 @@ class TradingStrategy:
             "sharpe_ratio": sharpe_ratio
         }
 
+    def plot_trading_signals(self):
+        """Plot the spread and highlight buy and sell signals."""
+        buy_signals = self.signals[self.signals == 1].index
+        sell_signals = self.signals[self.signals == -1].index
+
+        plt.figure(figsize=(14, 7))
+        plt.plot(self.spread, label="Spread", color="blue")
+        plt.scatter(buy_signals, self.spread[buy_signals], marker="^", color="green", label="Buy Signal")
+        plt.scatter(sell_signals, self.spread[sell_signals], marker="v", color="red", label="Sell Signal")
+        plt.title("Spread with Buy and Sell Signals")
+        plt.xlabel("Date")
+        plt.ylabel("Spread")
+        plt.legend()
+        plt.grid()
+        plt.show()
+
 
 # Example Usage:
 # Replace 'merged_aeco_prices.xlsx' and 'merged_nymex_prices.xlsx' with the paths to your files
@@ -121,3 +138,6 @@ performance = strategy.performance_metrics()
 
 # Output performance metrics
 print(performance)
+
+# Plot trading signals
+strategy.plot_trading_signals()
