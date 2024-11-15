@@ -67,7 +67,7 @@ class OrnsteinUhlenbeck:
         else:
             raise ValueError("OU Parameter estimation failed.")
 
-    def generate_signals(self) -> pd.Series:
+    def generate_signals(self) -> pd.DataFrame:
         """Generate mean reversion signals based on OU model."""
         if self.params is None:
             self.fit()
@@ -75,27 +75,27 @@ class OrnsteinUhlenbeck:
         z_score = (self.spread - mu) / sigma
 
         signals = np.zeros(len(z_score))  # Initialize signals
-        position = 0  # Track current position: 1 for long, -1 for short, 0 for neutral
+        positions = np.zeros(len(z_score))  # Track positions: 1 for long, -1 for short, 0 for neutral
 
         for i in range(1, len(z_score)):
-            if position == 0:  # No position
+            if positions[i - 1] == 0:  # No position
                 if z_score[i] > self.z_entry_threshold:  # Enter short position
                     signals[i] = -1
-                    position = -1
+                    positions[i] = -1
                 elif z_score[i] < -self.z_entry_threshold:  # Enter long position
                     signals[i] = 1
-                    position = 1
-            elif position == 1:  # Long position
+                    positions[i] = 1
+            elif positions[i - 1] == 1:  # Long position
                 if z_score[i] >= -self.take_profit_threshold:  # Close long position
                     signals[i] = 0
-                    position = 0
-            elif position == -1:  # Short position
+                    positions[i] = 0
+            elif positions[i - 1] == -1:  # Short position
                 if z_score[i] <= self.take_profit_threshold:  # Close short position
                     signals[i] = 0
-                    position = 0
+                    positions[i] = 0
+            positions[i] = positions[i] if signals[i] == 0 else signals[i]
 
-        return pd.Series(signals, index=self.spread.index)
-
+        return pd.DataFrame({'signals': signals, 'positions': positions}, index=self.spread.index)
 
 
 class TradingStrategy:
@@ -107,9 +107,9 @@ class TradingStrategy:
 
     def backtest(self) -> pd.DataFrame:
         """Backtest the strategy based on signals and calculate returns."""
-        position = self.signals.shift(1).fillna(0)  # Enter on the next time step
+        position = self.signals['positions'].shift(1).fillna(0)  # Enter on the next time step
         self.returns = position * self.spread.pct_change().fillna(0)
-        return pd.DataFrame({"signals": self.signals, "returns": self.returns})
+        return pd.DataFrame({"signals": self.signals['signals'], "positions": self.signals['positions'], "returns": self.returns})
 
     def performance_metrics(self) -> dict:
         """Calculate performance metrics for the strategy."""
@@ -125,15 +125,17 @@ class TradingStrategy:
         }
 
     def plot_trading_signals(self):
-        """Plot the spread and highlight buy and sell signals."""
-        buy_signals = self.signals[self.signals == 1].index
-        sell_signals = self.signals[self.signals == -1].index
+        """Plot the spread and highlight buy, sell, and profit-taking signals."""
+        buy_signals = self.signals[self.signals['signals'] == 1].index
+        sell_signals = self.signals[self.signals['signals'] == -1].index
+        close_positions = self.signals[self.signals['signals'] == 0].index
 
         plt.figure(figsize=(14, 7))
         plt.plot(self.spread, label="Spread", color="blue")
         plt.scatter(buy_signals, self.spread[buy_signals], marker="^", color="green", label="Buy Signal")
         plt.scatter(sell_signals, self.spread[sell_signals], marker="v", color="red", label="Sell Signal")
-        plt.title("Spread with Buy and Sell Signals")
+        plt.scatter(close_positions, self.spread[close_positions], marker="o", color="orange", label="Close Position")
+        plt.title("Spread with Buy, Sell, and Close Signals")
         plt.xlabel("Date")
         plt.ylabel("Spread")
         plt.legend()
@@ -152,7 +154,7 @@ merged_data = data_loader.load_and_merge_data()
 spread_data = data_loader.preprocess_data()
 
 # Fit OU model and generate signals
-ou_model = OrnsteinUhlenbeck(spread_data['spread'])
+ou_model = OrnsteinUhlenbeck(spread_data['spread'], z_entry_threshold=2.0, take_profit_threshold=0.5)
 signals = ou_model.generate_signals()
 
 # Backtest the strategy
