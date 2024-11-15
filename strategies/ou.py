@@ -93,14 +93,15 @@ class OrnsteinUhlenbeck:
                 if z_score[i] <= self.take_profit_threshold:  # Close short position
                     signals[i] = 0
                     positions[i] = 0
-            positions[i] = positions[i] if signals[i] == 0 else signals[i]
+            else:
+                positions[i] = positions[i - 1]  # Maintain the current position if no signal changes it
 
         return pd.DataFrame({'signals': signals, 'positions': positions}, index=self.spread.index)
 
 
 class TradingStrategy:
     """Manages trading signals and portfolio positions."""
-    def __init__(self, signals: pd.Series, spread: pd.Series):
+    def __init__(self, signals: pd.DataFrame, spread: pd.Series):
         self.signals = signals
         self.spread = spread
         self.returns = None
@@ -125,10 +126,10 @@ class TradingStrategy:
         }
 
     def plot_trading_signals(self):
-        """Plot the spread and highlight buy, sell, and profit-taking signals."""
+        """Plot the spread and highlight buy, sell, and close signals."""
         buy_signals = self.signals[self.signals['signals'] == 1].index
         sell_signals = self.signals[self.signals['signals'] == -1].index
-        close_positions = self.signals[self.signals['signals'] == 0].index
+        close_positions = self.signals[(self.signals['signals'] == 0) & (self.signals['positions'].shift(1) != 0)].index
 
         plt.figure(figsize=(14, 7))
         plt.plot(self.spread, label="Spread", color="blue")
@@ -144,7 +145,6 @@ class TradingStrategy:
 
 
 # Example Usage:
-# Replace 'merged_aeco_prices.xlsx' and 'merged_nymex_prices.xlsx' with the paths to your files
 aeco_file = 'merged_aeco_prices.xlsx'
 nymex_file = 'merged_nymex_prices.xlsx'
 
