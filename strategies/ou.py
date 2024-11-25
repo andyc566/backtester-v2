@@ -38,11 +38,9 @@ class DataLoader:
 
 class OrnsteinUhlenbeck:
     """Implements the Ornstein-Uhlenbeck process to model mean reversion with take-profit criteria."""
-    def __init__(self, spread: pd.Series, z_entry_threshold: float = 2.0, take_profit_threshold: float = 0.5):
+    def __init__(self, spread: pd.Series):
         self.spread = spread
         self.params = None
-        self.z_entry_threshold = z_entry_threshold  # Z-score threshold for entry
-        self.take_profit_threshold = take_profit_threshold  # Z-score threshold for exit
 
     def fit(self) -> Tuple[float, float, float]:
         """Estimate OU parameters (mean, speed of reversion, volatility)."""
@@ -67,34 +65,36 @@ class OrnsteinUhlenbeck:
         else:
             raise ValueError("OU Parameter estimation failed.")
 
-    def generate_signals(self) -> pd.DataFrame:
-        """Generate mean reversion signals based on OU model."""
+    def generate_signals(self, z_entry_buy_threshold: float = -1.0, z_entry_sell_threshold: float = 1.0, z_exit_threshold: float = 0.5) -> pd.DataFrame:
+        """Generate mean reversion signals with take-profit thresholds."""
         if self.params is None:
             self.fit()
         mu, theta, sigma = self.params
         z_score = (self.spread - mu) / sigma
 
-        signals = np.zeros(len(z_score))  # Initialize signals
-        positions = np.zeros(len(z_score))  # Track positions: 1 for long, -1 for short, 0 for neutral
+        signals = np.zeros(len(z_score))
+        positions = np.zeros(len(z_score))
 
         for i in range(1, len(z_score)):
             if positions[i - 1] == 0:  # No position
-                if z_score[i] > self.z_entry_threshold:  # Enter short position
+                if z_score[i] > z_entry_sell_threshold:  # Enter short
                     signals[i] = -1
                     positions[i] = -1
-                elif z_score[i] < -self.z_entry_threshold:  # Enter long position
+                elif z_score[i] < z_entry_buy_threshold:  # Enter long
                     signals[i] = 1
                     positions[i] = 1
             elif positions[i - 1] == 1:  # Long position
-                if z_score[i] >= -self.take_profit_threshold:  # Close long position
+                if z_score[i] >= -z_exit_threshold:  # Close long
                     signals[i] = 0
                     positions[i] = 0
+                else:
+                    positions[i] = positions[i - 1]
             elif positions[i - 1] == -1:  # Short position
-                if z_score[i] <= self.take_profit_threshold:  # Close short position
+                if z_score[i] <= z_exit_threshold:  # Close short
                     signals[i] = 0
                     positions[i] = 0
-            else:
-                positions[i] = positions[i - 1]  # Maintain the current position if no signal changes it
+                else:
+                    positions[i] = positions[i - 1]
 
         return pd.DataFrame({'signals': signals, 'positions': positions}, index=self.spread.index)
 
@@ -126,20 +126,18 @@ class TradingStrategy:
         }
 
     def plot_trading_signals(self):
-        """Plot the spread and highlight buy, sell, and profit-taking signals."""
+        """Plot the spread and highlight buy, sell, and close signals."""
         buy_signals = self.signals[self.signals['signals'] == 1].index
         sell_signals = self.signals[self.signals['signals'] == -1].index
-
-        # Identify where positions are closed
-        close_positions = self.signals[
-            (self.signals['positions'].shift(1) != 0) & (self.signals['positions'] == 0)
+        close_signals = self.signals[
+            (self.signals['signals'] == 0) & (self.signals['positions'].shift(1) != 0)
         ].index
 
         plt.figure(figsize=(14, 7))
         plt.plot(self.spread, label="Spread", color="blue")
         plt.scatter(buy_signals, self.spread[buy_signals], marker="^", color="green", label="Buy Signal")
         plt.scatter(sell_signals, self.spread[sell_signals], marker="v", color="red", label="Sell Signal")
-        plt.scatter(close_positions, self.spread[close_positions], marker="o", color="orange", label="Close Position")
+        plt.scatter(close_signals, self.spread[close_signals], marker="o", color="orange", label="Close Position")
         plt.title("Spread with Buy, Sell, and Close Signals")
         plt.xlabel("Date")
         plt.ylabel("Spread")
@@ -148,7 +146,35 @@ class TradingStrategy:
         plt.show()
 
 
-# Example Usage:
+def optimize_thresholds(spread: pd.Series, ou_model: OrnsteinUhlenbeck) -> dict:
+    """Optimize entry and exit z-score thresholds to maximize Sharpe ratio."""
+    def objective(params):
+        z_entry_buy, z_entry_sell, z_exit = params
+        signals = ou_model.generate_signals(z_entry_buy, z_entry_sell, z_exit)
+        strategy = TradingStrategy(signals, spread)
+        backtest_results = strategy.backtest()
+        metrics = strategy.performance_metrics()
+        return -metrics["sharpe_ratio"]  # Minimize negative Sharpe ratio
+
+    # Initial guesses and bounds
+    initial_guess = [-1.0, 1.0, 0.5]
+    bounds = [(-3.0, 0.0), (0.0, 3.0), (0.1, 1.0)]  # Buy < 0, Sell > 0, Exit > 0
+
+    # Optimize
+    result = minimize(objective, initial_guess, bounds=bounds)
+
+    if result.success:
+        optimal_thresholds = {
+            "z_entry_buy_threshold": result.x[0],
+            "z_entry_sell_threshold": result.x[1],
+            "z_exit_threshold": result.x[2]
+        }
+        return optimal_thresholds
+    else:
+        raise ValueError("Optimization failed.")
+
+
+# Example Usage
 aeco_file = 'merged_aeco_prices.xlsx'
 nymex_file = 'merged_nymex_prices.xlsx'
 
@@ -157,9 +183,19 @@ data_loader = DataLoader(aeco_file, nymex_file)
 merged_data = data_loader.load_and_merge_data()
 spread_data = data_loader.preprocess_data()
 
-# Fit OU model and generate signals
-ou_model = OrnsteinUhlenbeck(spread_data['spread'], z_entry_threshold=2.0, take_profit_threshold=0.5)
-signals = ou_model.generate_signals()
+# Fit OU model
+ou_model = OrnsteinUhlenbeck(spread_data['spread'])
+
+# Optimize z-score thresholds
+optimal_thresholds = optimize_thresholds(spread_data['spread'], ou_model)
+print("Optimal Thresholds:", optimal_thresholds)
+
+# Generate signals using optimal thresholds
+signals = ou_model.generate_signals(
+    optimal_thresholds["z_entry_buy_threshold"],
+    optimal_thresholds["z_entry_sell_threshold"],
+    optimal_thresholds["z_exit_threshold"]
+)
 
 # Backtest the strategy
 strategy = TradingStrategy(signals, spread_data['spread'])
