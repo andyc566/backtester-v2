@@ -1,0 +1,2 @@
+Volatility (Strategy): 1.08
+Sharpe Ratio: -0.12

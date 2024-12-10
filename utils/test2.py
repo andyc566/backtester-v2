@@ -1,45 +1,51 @@
-import os 
-
-def main(): 
-    filename = os.path.normpath("C:/Users/chena/Desktop/code/iso-ne-energy-forecast/data/plots/predictions_plot.png")
-    print(filename)
-
-if __name__ == "__main__": 
-    main() 
-
 '''
-Sub TestImageInsert()
-    Dim imagePath As String
-    Dim ws As Worksheet
-    Dim imgLeft As Double
-    Dim imgTop As Double
+Sub RunPythonScript()
+    Dim pythonExe As String
+    Dim pythonScript As String
+    Dim argument As String
+    Dim tempFile As String
+    Dim result As String
+    Dim shellCommand As String
+    Dim objFSO As Object
+    Dim objFile As Object
     
-    imagePath = "C:\Users\chena\Desktop\code\iso-ne-energy-forecast\data\plots\predictions_plot.png"
+    ' Define the path to the Python executable
+    pythonExe = "C:\Path\To\python.exe" ' Adjust this to your Python executable path
+
+    ' Define the path to the Python script
+    pythonScript = "C:\Path\To\your_script.py" ' Adjust this to your Python script path
+
+    ' Get the argument from cell A1
+    argument = Range("A1").Value
+
+    ' Define a temporary file to store the Python output
+    tempFile = Environ("TEMP") & "\python_output.txt"
     
-    ' Confirm the file exists
-    If Dir(imagePath) = "" Then
-        MsgBox "File not found: " & imagePath, vbCritical, "Error"
+    ' Build the shell command to execute the Python script with an argument
+    shellCommand = pythonExe & " " & pythonScript & " " & argument & " > " & tempFile
+
+    ' Run the shell command
+    Shell shellCommand, vbHide
+
+    ' Wait for the Python script to finish
+    Application.Wait (Now + TimeValue("0:00:02"))
+
+    ' Read the output from the temporary file
+    Set objFSO = CreateObject("Scripting.FileSystemObject")
+    If objFSO.FileExists(tempFile) Then
+        Set objFile = objFSO.OpenTextFile(tempFile, 1)
+        result = objFile.ReadAll
+        objFile.Close
+    Else
+        MsgBox "Output file not found.", vbExclamation
         Exit Sub
     End If
-    
-    ' Insert the image
-    Set ws = ThisWorkbook.ActiveSheet
-    imgLeft = ws.Range("A1").Left
-    imgTop = ws.Range("A1").Top
-    
-    On Error Resume Next
-    ws.Pictures.Insert(imagePath).Select
-    If Err.Number <> 0 Then
-        MsgBox "Error inserting image: " & Err.Description, vbCritical, "Error"
-    Else
-        Selection.ShapeRange.LockAspectRatio = msoTrue ' Maintain aspect ratio
-        Selection.ShapeRange.Left = imgLeft
-        Selection.ShapeRange.Top = imgTop
-        MsgBox "Image inserted successfully!", vbInformation, "Success"
-    End If
-    On Error GoTo 0
+
+    ' Place the result in cell A2
+    Range("A2").Value = result
+
+    ' Clean up
+    objFSO.DeleteFile tempFile
 End Sub
-
-
 
 '''
