@@ -5,6 +5,13 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 import pandas as pd
 import time
+import logging
+import schedule
+import threading
+import xlwings as xw
+
+# Set up logging
+logging.basicConfig(filename='log.txt', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Set up Selenium options
 chrome_options = Options()
@@ -12,45 +19,76 @@ chrome_options.add_argument("--headless")  # Run in headless mode
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
 
-# Define the URL to scrape
-url = "https://my.tccustomerexpress.com/"
+def scrape_website():
+    # Define the URL to scrape
+    url = "https://my.tccustomerexpress.com/"
 
-# Initialize WebDriver
-service = Service("NULL")  # Update with your ChromeDriver path
-browser = webdriver.Chrome(service=service, options=chrome_options)
+    # Initialize WebDriver
+    service = Service("/path/to/chromedriver")  # Update with your ChromeDriver path
+    browser = webdriver.Chrome(service=service, options=chrome_options)
 
-# Open the website
-browser.get(url)
+    try:
+        logging.info("Opening the website")
+        browser.get(url)
 
-time.sleep(5)  # Allow time for the page to load
+        time.sleep(5)  # Allow time for the page to load
 
-# Extract planned maintenance data
-maintenance_list = []
+        logging.info("Extracting planned maintenance data")
+        maintenance_list = []
 
-# Example extraction - Adjust selectors based on actual site structure
-try:
-    maintenance_items = browser.find_elements(By.CLASS_NAME, "maintenance-item")
-    for item in maintenance_items:
-        receipt_point = item.find_element(By.TAG_NAME, "h3").text
-        date = item.find_element(By.CLASS_NAME, "maintenance-date").text
-        details = item.find_element(By.CLASS_NAME, "maintenance-details").text
+        # Example extraction - Adjust selectors based on actual site structure
+        maintenance_items = browser.find_elements(By.CLASS_NAME, "maintenance-item")
+        logging.debug(f"Found {len(maintenance_items)} maintenance items")
 
-        maintenance_list.append({
-            "Receipt Point": receipt_point,
-            "Date": date,
-            "Details": details
-        })
+        for item in maintenance_items:
+            receipt_point = item.find_element(By.TAG_NAME, "h3").text
+            date = item.find_element(By.CLASS_NAME, "maintenance-date").text
+            details = item.find_element(By.CLASS_NAME, "maintenance-details").text
 
-    # Convert to DataFrame
-    df = pd.DataFrame(maintenance_list)
+            logging.debug(f"Extracted item: {receipt_point}, {date}, {details}")
+            maintenance_list.append({
+                "Receipt Point": receipt_point,
+                "Date": date,
+                "Details": details
+            })
 
-    # Export to Excel
-    output_file = "planned_maintenance.xlsx"
-    df.to_excel(output_file, index=False, engine='openpyxl')
-    print(f"Data exported to {output_file}")
+        # Write to Excel using xlwings
+        output_file = "planned_maintenance.xlsx"
+        app = xw.App(visible=False)
+        wb = app.books.add()
+        sheet = wb.sheets[0]
 
-except Exception as e:
-    print(f"An error occurred: {e}")
+        # Write headers
+        headers = ["Receipt Point", "Date", "Details"]
+        sheet.range("A1").value = headers
 
-finally:
-    browser.quit()
+        # Write data
+        for i, entry in enumerate(maintenance_list, start=2):
+            sheet.range(f"A{i}").value = [entry["Receipt Point"], entry["Date"], entry["Details"]]
+
+        wb.save(output_file)
+        wb.close()
+        app.quit()
+
+        logging.info(f"Data exported to {output_file}")
+        print(f"Data exported to {output_file}")
+
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
+        print(f"An error occurred: {e}")
+
+    finally:
+        browser.quit()
+        logging.info("Browser closed")
+
+# Schedule the job to run every 1 minute
+schedule.every(1).minute.do(scrape_website)
+
+def run_scheduler():
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+# Run the scheduler in a separate thread
+scheduler_thread = threading.Thread(target=run_scheduler)
+scheduler_thread.start()
