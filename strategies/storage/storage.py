@@ -1,259 +1,167 @@
-import pulp
 import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill
 
-# Complete Storage Configuration
-STORAGE_CONFIG = {
-    # Storage level thresholds (in GJ)
-    'thresholds': {
-        'low': 500000,    # First threshold for rate changes
-        'high': 750000,   # Second threshold for rate changes
-        'max': 1000000    # Maximum storage capacity
-    },
+class StorageConfig:
+    def __init__(self,
+                 max_capacity=1000000,
+                 low_threshold=500000,
+                 high_threshold=750000,
+                 injection_limit_low=7500,
+                 injection_limit_mid=5000,
+                 injection_limit_high=2500,
+                 withdrawal_limit_low=2500,
+                 withdrawal_limit_mid=5000,
+                 withdrawal_limit_high=7500,
+                 winter_months=[10, 11, 12, 1, 2, 3],
+                 prices=None):
+        
+        self.max_capacity = max_capacity
+        self.low_threshold = low_threshold
+        self.high_threshold = high_threshold
+        self.injection_limit_low = injection_limit_low
+        self.injection_limit_mid = injection_limit_mid
+        self.injection_limit_high = injection_limit_high
+        self.withdrawal_limit_low = withdrawal_limit_low
+        self.withdrawal_limit_mid = withdrawal_limit_mid
+        self.withdrawal_limit_high = withdrawal_limit_high
+        self.winter_months = winter_months
+        self.summer_months = [m for m in range(1, 13) if m not in winter_months]
+        
+        self.prices = prices or {
+            '2025-04': 2.0, '2025-05': 1.8, '2025-06': 1.9,
+            '2025-07': 2.0, '2025-08': 2.1, '2025-09': 2.2,
+            '2025-10': 3.5, '2025-11': 3.6, '2025-12': 3.7,
+            '2026-01': 3.8, '2026-02': 3.9, '2026-03': 3.8
+        }
+
+def create_price_schedule(config):
+    start_date = datetime(2025, 4, 1)
+    dates = []
+    daily_prices = []
     
-    # Injection rates for different storage levels (GJ/day)
-    'injection_rates': {
-        'below_low': 7500,      # Rate when storage < low threshold
-        'mid_range': 5000,      # Rate when low threshold <= storage < high threshold
-        'above_high': 2500      # Rate when storage >= high threshold
-    },
+    for _ in range(365):
+        month_key = start_date.strftime('%Y-%m')
+        dates.append(start_date)
+        daily_prices.append(config.prices[month_key])
+        start_date += timedelta(days=1)
     
-    # Withdrawal rates for different storage levels (GJ/day)
-    'withdrawal_rates': {
-        'above_high': 7500,     # Rate when storage > high threshold
-        'mid_range': 5000,      # Rate when high threshold >= storage > low threshold
-        'below_low': 2500       # Rate when storage <= low threshold
-    },
+    return pd.DataFrame({'Date': dates, 'Price': daily_prices})
+
+def get_injection_limit(current_storage, config):
+    if current_storage < config.low_threshold:
+        return config.injection_limit_low
+    elif current_storage < config.high_threshold:
+        return config.injection_limit_mid
+    else:
+        return config.injection_limit_high
+
+def get_withdrawal_limit(current_storage, config):
+    if current_storage > config.high_threshold:
+        return config.withdrawal_limit_high
+    elif current_storage > config.low_threshold:
+        return config.withdrawal_limit_mid
+    else:
+        return config.withdrawal_limit_low
+
+def optimize_storage(config):
+    # Initialize data
+    df = create_price_schedule(config)
     
-    # Monthly schedule configuration
-    'schedule': {
-        # Format: 'Month-Year': (days_in_month, price_per_gj)
-        'Apr-2025': (30, 2.0),
-        'May-2025': (31, 1.8),
-        'Jun-2025': (30, 1.9),
-        'Jul-2025': (31, 2.0),
-        'Aug-2025': (31, 2.1),
-        'Sep-2025': (30, 2.2),
-        'Oct-2025': (31, 2.5),
-        'Nov-2025': (30, 2.6),
-        'Dec-2025': (31, 2.7),
-        'Jan-2026': (31, 2.8),
-        'Feb-2026': (28, 2.9),
-        'Mar-2026': (31, 2.8)
-    },
+    # Initialize columns with explicit dtypes
+    df['Storage'] = 0
+    df['Action'] = 0
+    df['Daily_Profit'] = 0.0  # Explicitly set as float
+    df['Season'] = 'Summer'
     
-    # Seasonal configuration
-    'seasons': {
-        # List of months where injection is allowed
-        'injection_months': ['Apr-2025', 'May-2025', 'Jun-2025', 
-                           'Jul-2025', 'Aug-2025', 'Sep-2025'],
-        # List of months where withdrawal is allowed
-        'withdrawal_months': ['Oct-2025', 'Nov-2025', 'Dec-2025', 
-                            'Jan-2026', 'Feb-2026', 'Mar-2026'],
-        'require_full_cycle': True  # Whether to require complete fill and empty cycle
+    # Define winter/summer seasons
+    df.loc[df['Date'].dt.month.isin(config.winter_months), 'Season'] = 'Winter'
+    
+    current_storage = 0
+    
+    # Summer injection
+    summer_mask = df['Season'] == 'Summer'
+    for idx in df[summer_mask].index:
+        injection_limit = get_injection_limit(current_storage, config)
+        
+        if current_storage < config.max_capacity:
+            injection = min(injection_limit, config.max_capacity - current_storage)
+            df.loc[idx, 'Action'] = injection
+            current_storage += injection
+            df.loc[idx, 'Storage'] = current_storage
+            df.loc[idx, 'Daily_Profit'] = float(-injection * df.loc[idx, 'Price'])  # Explicit float conversion
+    
+    # Winter withdrawal
+    winter_mask = df['Season'] == 'Winter'
+    for idx in df[winter_mask].index:
+        withdrawal_limit = get_withdrawal_limit(current_storage, config)
+        
+        if current_storage > 0:
+            withdrawal = min(withdrawal_limit, current_storage)
+            df.loc[idx, 'Action'] = -withdrawal
+            current_storage -= withdrawal
+            df.loc[idx, 'Storage'] = current_storage
+            df.loc[idx, 'Daily_Profit'] = float(withdrawal * df.loc[idx, 'Price'])  # Explicit float conversion
+    
+    return df
+
+def export_to_excel(df, filename='natgas_storage_optimization.xlsx'): # DEFINE YOUR PATH HERE
+    writer = pd.ExcelWriter(filename, engine='openpyxl')
+    df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+    df.to_excel(writer, index=False, sheet_name='Storage_Schedule')
+    
+    workbook = writer.book
+    worksheet = writer.sheets['Storage_Schedule']
+    
+    header_fill = PatternFill(start_color='CCCCCC', end_color='CCCCCC', fill_type='solid')
+    
+    for cell in worksheet[1]:
+        cell.fill = header_fill
+    
+    for column in worksheet.columns:
+        max_length = 0
+        column = list(column)
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = (max_length + 2)
+        worksheet.column_dimensions[column[0].column_letter].width = adjusted_width
+    
+    writer.close()
+
+# Example usage with custom configuration
+custom_config = StorageConfig(
+    max_capacity=1000000,  # Increased capacity
+    low_threshold=500000,  # Modified thresholds
+    high_threshold=750000,
+    injection_limit_low=10000,  # Modified injection limits
+    injection_limit_mid=7500,
+    injection_limit_high=5000,
+    withdrawal_limit_low=5000,  # Modified withdrawal limits
+    withdrawal_limit_mid=7500,
+    withdrawal_limit_high=10000,
+    winter_months=[10, 11, 12, 1, 2, 3],  # Modified winter season
+    prices={  # Custom prices
+        '2025-04': 2.2, '2025-05': 2.0, '2025-06': 2.1,
+        '2025-07': 2.2, '2025-08': 2.3, '2025-09': 2.4,
+        '2025-10': 3.7, '2025-11': 3.8, '2025-12': 3.9,
+        '2026-01': 4.0, '2026-02': 4.1, '2026-03': 4.0
     }
-}
+)
 
-def optimize_storage(config=STORAGE_CONFIG):
-    """
-    Optimize natural gas storage operations based on provided configuration.
-    
-    Args:
-        config (dict): Configuration dictionary containing all parameters for optimization
-                      Including storage thresholds, rates, schedule, and seasonal constraints
-    
-    Returns:
-        pandas.DataFrame: Results containing daily rates, storage levels, and profits
-    """
-    # Initialize the optimization model
-    model = pulp.LpProblem("NatGasStorage", pulp.LpMaximize)
-    
-    # Extract schedule and seasonal information from config
-    schedule = config['schedule']
-    months = list(schedule.keys())
-    injection_months = config['seasons']['injection_months']
-    withdrawal_months = config['seasons']['withdrawal_months']
-    
-    # Validate that all months are properly categorized
-    all_months = set(months)
-    injection_set = set(injection_months)
-    withdrawal_set = set(withdrawal_months)
-    if not (injection_set | withdrawal_set) == all_months:
-        raise ValueError("All months must be categorized as either injection or withdrawal months")
-    if injection_set & withdrawal_set:
-        raise ValueError("A month cannot be both an injection and withdrawal month")
-    
-    # Extract storage threshold values
-    low_threshold = config['thresholds']['low']
-    high_threshold = config['thresholds']['high']
-    max_storage = config['thresholds']['max']
-    
-    # Determine maximum rates
-    max_injection_rate = max(config['injection_rates'].values())
-    max_withdrawal_rate = max(config['withdrawal_rates'].values())
-    
-    # Initialize decision variables
-    rates = {}       # Daily injection/withdrawal rates
-    storage = {}     # Storage levels at end of each month
-    
-    # Binary variables to track storage level ranges
-    in_range_low = {}    # 0 to low_threshold
-    in_range_mid = {}    # low_threshold to high_threshold
-    in_range_high = {}   # high_threshold to max_storage
-    
-    # Create variables for each month
-    for m in months:
-        # Rate variables: positive for injection, negative for withdrawal
-        if m in injection_months:
-            rates[m] = pulp.LpVariable(f"rate_{m}", 0, max_injection_rate)
-        else:
-            rates[m] = pulp.LpVariable(f"rate_{m}", -max_withdrawal_rate, 0)
-        
-        # Storage level variables
-        storage[m] = pulp.LpVariable(f"storage_{m}", 0, max_storage)
-        
-        # Binary variables for storage ranges
-        in_range_low[m] = pulp.LpVariable(f"range1_{m}", 0, 1, pulp.LpBinary)
-        in_range_mid[m] = pulp.LpVariable(f"range2_{m}", 0, 1, pulp.LpBinary)
-        in_range_high[m] = pulp.LpVariable(f"range3_{m}", 0, 1, pulp.LpBinary)
-    
-    # Objective function: Maximize profit
-    # Negative rate (withdrawal) * price = revenue
-    # Positive rate (injection) * price = cost
-    model += pulp.lpSum(-rates[m] * schedule[m][1] * schedule[m][0] for m in months)
-    
-    # Storage evolution constraints
-    # Initial storage calculation
-    model += storage[months[0]] == rates[months[0]] * schedule[months[0]][0]
-    
-    # Storage evolution for subsequent months
-    for i in range(1, len(months)):
-        prev_month = months[i-1]
-        curr_month = months[i]
-        model += storage[curr_month] == storage[prev_month] + rates[curr_month] * schedule[curr_month][0]
-    
-    # Storage cycle constraints (if required)
-    if config['seasons']['require_full_cycle']:
-        # Must reach max capacity by end of injection season
-        model += storage[injection_months[-1]] == max_storage
-        # Must empty by end of cycle
-        model += storage[months[-1]] == 0
-    
-    # Storage range constraints for each month
-    for m in months:
-        # Ensure exactly one range is active
-        model += in_range_low[m] + in_range_mid[m] + in_range_high[m] == 1
-        
-        # Define storage range boundaries
-        # Low range: 0 to low_threshold
-        model += storage[m] <= low_threshold + max_storage * (1 - in_range_low[m])
-        model += storage[m] >= 0 * in_range_low[m]
-        
-        # Mid range: low_threshold to high_threshold
-        model += storage[m] <= high_threshold + max_storage * (1 - in_range_mid[m])
-        model += storage[m] >= low_threshold * in_range_mid[m]
-        
-        # High range: high_threshold to max_storage
-        model += storage[m] <= max_storage + max_storage * (1 - in_range_high[m])
-        model += storage[m] >= high_threshold * in_range_high[m]
-        
-        # Rate constraints based on storage levels
-        if m in injection_months:
-            # Injection rates decrease as storage fills
-            model += rates[m] <= (
-                config['injection_rates']['below_low'] * in_range_low[m] +
-                config['injection_rates']['mid_range'] * in_range_mid[m] +
-                config['injection_rates']['above_high'] * in_range_high[m]
-            )
-        else:
-            # Withdrawal rates decrease as storage empties
-            model += rates[m] >= -(
-                config['withdrawal_rates']['below_low'] * in_range_low[m] +
-                config['withdrawal_rates']['mid_range'] * in_range_mid[m] +
-                config['withdrawal_rates']['above_high'] * in_range_high[m]
-            )
-    
-    # Enforce seasonal constraints
-    for m in withdrawal_months:
-        model += rates[m] <= 0  # Only withdrawal allowed
-    for m in injection_months:
-        model += rates[m] >= 0  # Only injection allowed
-    
-    # Solve the optimization model
-    solver = pulp.PULP_CBC_CMD(msg=False)
-    status = model.solve(solver)
-    
-    if status != 1:
-        print("Warning: Optimal solution not found!")
-    
-    # Compile results
-    results = []
-    for m in months:
-        results.append({
-            'Month': m,
-            'Daily_Rate': rates[m].value(),
-            'Days': schedule[m][0],
-            'Price': schedule[m][1],
-            'Storage_Level': storage[m].value(),
-            'Monthly_Profit': -rates[m].value() * schedule[m][1] * schedule[m][0]
-        })
-    
-    return pd.DataFrame(results)
+# Run the optimization with custom config
+df_result = optimize_storage(custom_config)
 
-# Example of how to use custom configuration with different seasonal definitions
-custom_config = STORAGE_CONFIG.copy()
-custom_config = {
-    # Keep the original storage thresholds
-    'thresholds': {
-        'low': 500000,
-        'high': 750000,
-        'max': 1000000
-    },
-    
-    # Keep the original injection rates
-    'injection_rates': {
-        'below_low': 7500,
-        'mid_range': 5000,
-        'above_high': 2500
-    },
-    
-    # Keep the original withdrawal rates
-    'withdrawal_rates': {
-        'above_high': 7500,
-        'mid_range': 5000,
-        'below_low': 2500
-    },
-    
-    # Modified schedule with custom prices
-    'schedule': {
-        'Apr-2025': (30, 1.5),  # Lower summer prices
-        'May-2025': (31, 1.4),
-        'Jun-2025': (30, 1.6),
-        'Jul-2025': (31, 1.8),
-        'Aug-2025': (31, 2.0),
-        'Sep-2025': (30, 2.2),
-        'Oct-2025': (31, 3.0),  # Higher winter prices
-        'Nov-2025': (30, 3.2),
-        'Dec-2025': (31, 3.5),
-        'Jan-2026': (31, 3.8),
-        'Feb-2026': (28, 4.0),
-        'Mar-2026': (31, 3.7)
-    },
-    
-    # Modified seasonal configuration
-    'seasons': {
-        'injection_months': ['Apr-2025', 'May-2025', 'Jun-2025', 'Jul-2025'],  # Changed injection period
-        'withdrawal_months': ['Aug-2025', 'Sep-2025', 'Oct-2025', 'Nov-2025', 
-                            'Dec-2025', 'Jan-2026', 'Feb-2026', 'Mar-2026'],
-        'require_full_cycle': True
-    }
-}
+# Calculate total profit
+total_profit = df_result['Daily_Profit'].sum()
 
-# Run optimization with custom configuration
-results = optimize_storage(custom_config)
-print("\nOptimization Results with Custom Configuration:")
-print(results[['Month', 'Daily_Rate', 'Days', 'Price', 'Storage_Level', 'Monthly_Profit']].to_string(index=False))
-print(f"\nTotal Profit: ${results['Monthly_Profit'].sum():,.2f}")
+# Export results
+export_to_excel(df_result)
 
-# You can also run with default configuration:
-# results = optimize_storage()
-
+print(f"Total Profit: ${total_profit:,.2f}")
+print(f"Results exported to natgas_storage_optimization.xlsx")

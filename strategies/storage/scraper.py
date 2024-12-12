@@ -54,7 +54,7 @@ def scrape_website():
 
         # Write to Excel using xlwings
         output_file = "planned_maintenance.xlsx"
-        app = xw.App(visible=False)
+        app = xw.App()
         wb = app.books.add()
         sheet = wb.sheets[0]
 
