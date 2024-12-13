@@ -1,0 +1,7 @@
+2024-12-12 09:15:30 Fraser/Gas Alberta Hello team, let's keep an eye on natural gas prices today.
+2024-12-12 09:16:45 Ken/TD Energy Roger. Keeping an eye out for you.
+2024-12-12 09:16:50 Fraser/Gas Alberta Where can I buy 1/day?
+2024-12-12 09:16:55 Ken/TD Energy 3.25
+2024-12-12 09:16:50 Fraser/Gas Alberta Done
+2024-12-12 09:17:10 Ken/TD Energy Gas Alberta Buys / TD Energy Sells 1/day at 3.25
+2024-12-12 09:18:30 Kevin/TD Energy Market is moving quite a bit this morning. I'm going to grab a coffee. 
