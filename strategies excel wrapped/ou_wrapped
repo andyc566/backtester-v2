@@ -1,0 +1,92 @@
+import os
+import sys
+import logging
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+from scipy.optimize import minimize
+import matplotlib.pyplot as plt
+
+# Setup logging
+logging.basicConfig(
+    filename='debug_log.txt',
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+try:
+    # Log start of the script
+    logging.info("Starting OU Python script.")
+
+    # Validate command-line arguments
+    if len(sys.argv) < 3:
+        raise ValueError("Missing file path arguments. Usage: python ou.py <aeco_file> <nymex_file>")
+    
+    aeco_file = os.path.abspath(sys.argv[1])
+    nymex_file = os.path.abspath(sys.argv[2])
+    logging.info(f"Received file paths: AECO: {aeco_file}, NYMEX: {nymex_file}")
+
+    if not os.path.exists(aeco_file) or not os.path.exists(nymex_file):
+        raise FileNotFoundError("One or both data files not found.")
+
+    # Load data
+    logging.info("Loading Excel data...")
+    aeco_data = pd.read_excel(aeco_file)
+    nymex_data = pd.read_excel(nymex_file)
+
+    aeco_data['Date'] = pd.to_datetime(aeco_data['Date'], errors='coerce')
+    nymex_data['Date'] = pd.to_datetime(nymex_data['Date'], errors='coerce')
+
+    if aeco_data['Date'].isna().any() or nymex_data['Date'].isna().any():
+        raise ValueError("Invalid dates detected in the provided files.")
+
+    # Merge data
+    merged_data = pd.merge(aeco_data, nymex_data, on='Date', suffixes=('_AECO', '_NYMEX')).dropna()
+    merged_data['spread'] = merged_data['Price_AECO'] - merged_data['Price_NYMEX']
+    spread = merged_data.set_index('Date')['spread']
+
+    # OU Model Fitting
+    def ou_log_likelihood(params):
+        mu, theta, sigma = params
+        diff = spread.diff().dropna()
+        xt = spread.shift(1).dropna()
+        log_likelihood = (
+            -0.5 * np.log(2 * np.pi * sigma**2) 
+            - ((diff - theta * (mu - xt))**2 / (2 * sigma**2))
+        ).sum()
+        return -log_likelihood
+
+    initial_guess = [spread.mean(), 0.1, spread.std()]
+    result = minimize(ou_log_likelihood, initial_guess, bounds=((None, None), (0, None), (0, None)))
+
+    if not result.success:
+        raise ValueError("OU Parameter estimation failed.")
+
+    mu, theta, sigma = result.x
+    logging.info(f"OU Parameters estimated: mu={mu:.4f}, theta={theta:.4f}, sigma={sigma:.4f}")
+
+    # Generate signals
+    z_score = (spread - mu) / sigma
+    signals = np.where(z_score > 1.0, -1, np.where(z_score < -1.0, 1, 0))
+
+    # Backtest
+    returns = spread.pct_change().fillna(0)
+    strategy_returns = signals[:-1] * returns[1:]
+    cumulative_returns = (1 + strategy_returns).cumprod()
+
+    strategy_volatility = strategy_returns.std() * np.sqrt(252)
+    sharpe_ratio = strategy_returns.mean() / strategy_returns.std() * np.sqrt(252)
+    logging.info(f"Backtest metrics calculated. Volatility: {strategy_volatility:.2f}, Sharpe Ratio: {sharpe_ratio:.2f}")
+
+    # Save metrics
+    output_file = os.path.join(os.path.dirname(__file__), "metrics_output.txt")
+    with open(output_file, "w") as f:
+        f.write(f"Volatility (Strategy): {strategy_volatility:.2f}\n")
+        f.write(f"Sharpe Ratio: {sharpe_ratio:.2f}\n")
+    logging.info("Metrics successfully written to file.")
+
+except Exception as e:
+    logging.critical(f"Critical Error: {e}", exc_info=True)
+    sys.exit(1)
+
+logging.info("OU script completed successfully.")
